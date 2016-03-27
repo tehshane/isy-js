@@ -200,6 +200,10 @@ ISYLockDevice.prototype.getCurrentLockState = function() {
     }
 }
 
+ISYLockDevice.prototype.getCurrentBatteryState = function() {
+
+}
+
 ////////////////////////////////////////////////////////////////////////
 // ISYDoorWindowDevice
 //

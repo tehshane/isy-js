@@ -12,7 +12,8 @@ var ISYFanDevice = require('./isydevice').ISYFanDevice;
 var ISYMotionSensorDevice = require('./isydevice').ISYMotionSensorDevice;
 var ISYScene = require('./isyscene').ISYScene;
 var ISYBaseDevice = require('./isydevice').ISYBaseDevice;
-var ISYVariable = require('./isyvariable').ISYVariable
+var ISYVariable = require('./isyvariable').ISYVariable;
+var ISYProgram = require('./isyprogram').ISYProgram;
 
 function isyTypeToTypeName(isyType,address) {
 	for(var index = 0; index < isyDeviceTypeList.length; index++ ) {
@@ -39,6 +40,8 @@ var ISY = function(address, username, password, elkEnabled, changeCallback, useH
     this.variableList = [];
     this.variableIndex = {};
     this.variableCallback = variableCallback;
+    this.programList = [];
+    this.programIndex = [];
     this.nodesLoaded = false;
     this.protocol = (useHttps == true) ? 'https' : 'http';
     this.elkEnabled = elkEnabled;
@@ -475,15 +478,77 @@ ISY.prototype.setVariableValues = function(result) {
         var init = parseInt(variableNode.childNamed('init').val);
         var value = parseInt(variableNode.childNamed('val').val);
         var ts = variableNode.childNamed('ts').val;
+        var year = parseInt(ts.substr(0,4));
+        var month = parseInt(ts.substr(4,2))-1;
+        var day = parseInt(ts.substr(6,2));
+        var hour = parseInt(ts.substr(9,2));
+        var min = parseInt(ts.substr(12,2));
+        var sec = parseInt(ts.substr(15,2));
+        var lastChanged = new Date(year,month,day,hour,min,sec);
 
         var variable = this.getVariable(type,id);
 
         if(variable != null) {
             variable.value = value;
             variable.init = init;
-            variable.lastChanged = new Date(ts);
+            variable.lastChanged = lastChanged;
         }
     }
+}
+
+ISY.prototype.loadPrograms = function(done) {
+    var that = this;
+    var options = {
+        username: this.userName,
+        password: this.password
+    }
+    // Load definitions
+    restler.get(
+        that.protocol+'://'+that.address+'/rest/programs?subfolders=true',
+        options
+    ).on('complete', function(result, response) {
+        if (response instanceof Error || response.statusCode != 200) {
+            that.logger('ISY-JS: Error loading programs from isy: ' + result.message);
+            throw new Error("Unable to load programs from the ISY");
+        } else {
+            that.createPrograms(result);
+            // Load initial values
+            done();
+        }
+    });
+}
+
+ISY.prototype.createPrograms = function(result) {
+    var document = new xmldoc.XmlDocument(result);
+    var programs = document.childrenNamed('program');
+    for(var index = 0; index < programs.length; index++) {
+        var id = programs[index].attr.id;
+        var name = programs[index].childrenNamed('name')[0].val;
+        var running = programs[index].attr.running;
+        var enabled = (programs[index].attr.enabled === 'true');
+        var lastRunTime = programs[index].childNamed('lastRunTime').val||null;
+        var lastFinishTime = programs[index].childNamed('lastFinishTime').val||null;
+
+        var newProgram = new ISYProgram(
+            this,
+            id,
+            name,
+            running,
+            enabled,
+            lastRunTime,
+            lastFinishTime
+        );
+        this.programList.push(newProgram);
+        this.programIndex[id] = newProgram;
+    }
+}
+
+ISY.prototype.getProgramList = function() {
+    return this.programList;
+}
+
+ISY.prototype.getProgram = function(id) {
+    return this.programIndex[id];
 }
 
 ISY.prototype.initialize = function(initializeCompleted) {
@@ -504,36 +569,37 @@ ISY.prototype.initialize = function(initializeCompleted) {
             throw new Error("Unable to contact the ISY to get the list of nodes");
         } else {
             that.loadNodes(result);
-
-            that.loadVariables(that.VARIABLE_TYPE_INTEGER, function() {
-                that.loadVariables(that.VARIABLE_TYPE_STATE, function() {
-                    if (that.elkEnabled) {
-                        restler.get(
-                            that.protocol + '://' + that.address + '/rest/elk/get/topology',
-                            options
-                        ).on('complete', function (result, response) {
-                            if (response instanceof Error || response.statusCode != 200) {
-                                that.logger('ISY-JS: Error loading from elk: ' + result.message);
-                                throw new Error("Unable to contact the ELK to get the topology");
-                            } else {
-                                that.loadElkNodes(result);
-                                restler.get(
-                                    that.protocol + '://' + that.address + '/rest/elk/get/status',
-                                    options
-                                ).on('complete', function (result, response) {
-                                    if (response instanceof Error || response.statusCode != 200) {
-                                        that.logger('ISY-JS: Error:' + result.message);
-                                        throw new Error("Unable to get the status from the elk");
-                                    } else {
-                                        that.loadElkInitialStatus(result);
-                                        that.finishInitialize(true, initializeCompleted);
-                                    }
-                                });
-                            }
-                        });
-                    } else {
-                        that.finishInitialize(true, initializeCompleted);
-                    }
+            that.loadPrograms(function() {
+                that.loadVariables(that.VARIABLE_TYPE_INTEGER, function() {
+                    that.loadVariables(that.VARIABLE_TYPE_STATE, function() {
+                        if (that.elkEnabled) {
+                            restler.get(
+                                that.protocol + '://' + that.address + '/rest/elk/get/topology',
+                                options
+                            ).on('complete', function (result, response) {
+                                if (response instanceof Error || response.statusCode != 200) {
+                                    that.logger('ISY-JS: Error loading from elk: ' + result.message);
+                                    throw new Error("Unable to contact the ELK to get the topology");
+                                } else {
+                                    that.loadElkNodes(result);
+                                    restler.get(
+                                        that.protocol + '://' + that.address + '/rest/elk/get/status',
+                                        options
+                                    ).on('complete', function (result, response) {
+                                        if (response instanceof Error || response.statusCode != 200) {
+                                            that.logger('ISY-JS: Error:' + result.message);
+                                            throw new Error("Unable to get the status from the elk");
+                                        } else {
+                                            that.loadElkInitialStatus(result);
+                                            that.finishInitialize(true, initializeCompleted);
+                                        }
+                                    });
+                                }
+                            });
+                        } else {
+                            that.finishInitialize(true, initializeCompleted);
+                        }
+                    });
                 });
             });
         }
@@ -726,6 +792,22 @@ ISY.prototype.sendSetVariable = function(id, type, value, handleResult) {
             handleResult(false);
         }
     });
+}
+
+ISY.prototype.sendProgramCommand = function(id, command, handleResult) {
+  var uriToUse = this.protocol+'://'+this.address+'/rest/programs/'+id+'/'+command;
+  this.logger("ISY-JS: Sending program command..."+uriToUse);
+  var options = {
+      username: this.userName,
+      password: this.password
+  };
+  restler.get(uriToUse, options).on('complete', function(data, response) {
+      if (response.statusCode === 200) {
+        handleResult(true);
+      } else {
+        handleResult(false);
+      }
+  });
 }
 
 exports.ISY = ISY;

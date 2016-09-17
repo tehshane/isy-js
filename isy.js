@@ -393,6 +393,10 @@ ISY.prototype.variableChangedHandler = function(variable) {
     }
 }
 
+ISY.prototype.checkForFailure = function(response) {
+    return (response == null || response instanceof Error || response.statusCode != 200);
+}
+
 ISY.prototype.loadVariables = function(type,done) {
     var that = this;
     var options = {
@@ -404,9 +408,9 @@ ISY.prototype.loadVariables = function(type,done) {
         that.protocol+'://'+that.address+'/rest/vars/definitions/'+type,
         options
     ).on('complete', function(result, response) {
-        if (response instanceof Error || response.statusCode != 200) {
-            that.logger('ISY-JS: Error loading variables from isy: ' + result.message);
-            throw new Error("Unable to load variables from the ISY");
+        if (that.checkForFailure(response)) {
+            that.logger("ISY-JS: Error loading variables from isy. Device likely doesn't have any variables defined. Safe to ignore.");
+            done()
         } else {
             that.createVariables(type, result);
             // Load initial values
@@ -414,7 +418,7 @@ ISY.prototype.loadVariables = function(type,done) {
                 that.protocol+'://'+that.address+'/rest/vars/get/'+type,
                 options
             ).on('complete', function(result, response) {
-                if (response instanceof Error || response.statusCode != 200) {
+                if (that.checkForFailure(response)) {
                     that.logger('ISY-JS: Error loading variables from isy: ' + result.message);
                     throw new Error("Unable to load variables from the ISY");
                 } else {
@@ -564,41 +568,41 @@ ISY.prototype.initialize = function(initializeCompleted) {
         this.protocol+'://'+this.address+'/rest/nodes',
         options
     ).on('complete', function(result, response) {
-        if(response instanceof Error || response.statusCode != 200) {
+        if(that.checkForFailure(response)) {
             this.logger('ISY-JS: Error:'+result.message);
             throw new Error("Unable to contact the ISY to get the list of nodes");
         } else {
             that.loadNodes(result);
             that.loadPrograms(function() {
-                that.loadVariables(that.VARIABLE_TYPE_INTEGER, function() {
-                    that.loadVariables(that.VARIABLE_TYPE_STATE, function() {
-                        if (that.elkEnabled) {
-                            restler.get(
-                                that.protocol + '://' + that.address + '/rest/elk/get/topology',
-                                options
-                            ).on('complete', function (result, response) {
-                                if (response instanceof Error || response.statusCode != 200) {
-                                    that.logger('ISY-JS: Error loading from elk: ' + result.message);
-                                    throw new Error("Unable to contact the ELK to get the topology");
-                                } else {
-                                    that.loadElkNodes(result);
-                                    restler.get(
-                                        that.protocol + '://' + that.address + '/rest/elk/get/status',
-                                        options
-                                    ).on('complete', function (result, response) {
-                                        if (response instanceof Error || response.statusCode != 200) {
-                                            that.logger('ISY-JS: Error:' + result.message);
-                                            throw new Error("Unable to get the status from the elk");
-                                        } else {
-                                            that.loadElkInitialStatus(result);
-                                            that.finishInitialize(true, initializeCompleted);
-                                        }
-                                    });
-                                }
-                            });
-                        } else {
-                            that.finishInitialize(true, initializeCompleted);
-                        }
+              that.loadVariables(that.VARIABLE_TYPE_INTEGER, function() {
+                  that.loadVariables(that.VARIABLE_TYPE_STATE, function() {
+                      if (that.elkEnabled) {
+                          restler.get(
+                              that.protocol + '://' + that.address + '/rest/elk/get/topology',
+                              options
+                          ).on('complete', function (result, response) {
+                              if (that.checkForFailure(response)) {
+                                  that.logger('ISY-JS: Error loading from elk: ' + result.message);
+                                  throw new Error("Unable to contact the ELK to get the topology");
+                              } else {
+                                  that.loadElkNodes(result);
+                                  restler.get(
+                                      that.protocol + '://' + that.address + '/rest/elk/get/status',
+                                      options
+                                  ).on('complete', function (result, response) {
+                                      if (that.checkForFailure(response)) {
+                                          that.logger('ISY-JS: Error:' + result.message);
+                                          throw new Error("Unable to get the status from the elk");
+                                      } else {
+                                          that.loadElkInitialStatus(result);
+                                          that.finishInitialize(true, initializeCompleted);
+                                      }
+                                  });
+                              }
+                          });
+                      } else {
+                          that.finishInitialize(true, initializeCompleted);
+                      }
                     });
                 });
             });
